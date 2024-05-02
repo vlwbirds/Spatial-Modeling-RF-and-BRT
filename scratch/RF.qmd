@@ -1,0 +1,122 @@
+---
+title: "Spatial Modeling - RF and BRT"
+format: html
+editor: visual
+---
+
+## Libraries
+
+```{r}
+# Load/install required packages
+library(tidyverse)
+library(usethis)
+library(rpart)
+library(ggplot2)
+library(biomod2)
+library(gridExtra)
+library(patchwork)
+library(ggspatial)
+library(prettymapr)
+library(rpart.plot)
+library(pdp)
+library(caret)
+library(randomForest)
+library(ranger)
+library(gbm)
+# We use the same dataset that we used for the GLM lab (Red Fox)
+# Read data
+mammals_data <- read.csv(here("data/mammals_and_bioclim_table.csv"),row.names = 1)
+
+RP <- rpart(VulpesVulpes ~ 1 + bio3 + bio7 + bio11 + bio12,
+              data = mammals_data, control = rpart.control(xval = 10), method = "class")
+
+print(RP)
+
+```
+
+## Initial Tree Plot
+
+```{r}
+plot(RP, uniform = F, margin = 0.1, branch = 0.5,
+     compress = T)
+text(RP, cex = 0.8)
+
+```
+
+## GGPLOT
+
+```{r}
+ggplot(mammals_data, aes(x = X_WGS84, y = Y_WGS84, color = as.factor(VulpesVulpes))) +
+  geom_point(alpha = 0.4, size = 0.6) +
+  scale_color_manual(values = c("lightgrey", "black"), name = "Occurrence record") +
+  theme_minimal() +
+  labs(title = "Original data")
+
+```
+
+### Fancy prediction map The book’s codes do not work.
+
+```{r}
+# Make some predictions using the model 
+RP.pred <- predict(RP, type = "prob")[, 2] 
+
+# Add predictions to your data frame 
+mammals_data$RP_pred = RP.pred 
+
+# Prediction map with a simple base map 
+ggplot() +
+  annotation_map_tile() +  # This adds a base map
+  geom_point(data = mammals_data, aes(x = X_WGS84, y = Y_WGS84, color = RP_pred), alpha = 0.4, size = 0.6) +
+  scale_color_gradient(low = "blue", high = "red", name = "Habitat Suitability") +
+  labs(title = "RP-Prediction Map", x = "Longitude", y = "Latitude") +
+  theme_minimal() +
+  theme(legend.position = "bottom", axis.text = element_text(size = 8))
+
+```
+
+## Response curves
+
+The book’s code does not work. This is the modified code to create response curves for the RP model.
+
+```{r}
+# Initialize an empty list to store all partial dependence data
+all_pdp_list <- list()
+
+# Loop through each variable and calculate the partial dependence
+for (variable in c("bio3", "bio7", "bio11", "bio12")) {
+  pdp_data <- partial(RP, pred.var = variable, prob = TRUE, which.class = 2, 
+                      grid.resolution = 50, plot = FALSE)
+  # Convert to a data frame
+  pdp_data_df <- as.data.frame(pdp_data)
+  # Standardize column names
+  names(pdp_data_df) <- c("value", "yhat")
+  # Add the variable name as a column
+  pdp_data_df$variable <- variable
+  # Append this data frame to the list
+  all_pdp_list[[variable]] <- pdp_data_df
+}
+
+# Combine all the partial dependence data frames into one using do.call and rbind
+all_pdp_data <- do.call(rbind, all_pdp_list)
+# Ensure that variable column is a factor for proper facet plotting
+all_pdp_data$variable <- factor(all_pdp_data$variable, levels = c("bio3", "bio7", "bio11", "bio12"))
+
+# Now plot using ggplot with facet_wrap
+pdp_plot <- ggplot(all_pdp_data, aes(x = value, y = yhat)) +
+  geom_line() +
+  facet_wrap(~variable, scales = "free_x", ncol = 4) + 
+  labs(y = "Probability of Occurrence") +
+  theme_minimal() +
+  theme(
+    strip.text.x = element_text(size = 12, face = "bold"),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none",
+    # Add panel borders with the updated argument
+    panel.border = element_rect(colour = "black", fill=NA, linewidth=1)
+  )
+
+# Print the plot
+print(pdp_plot)
+
+```
