@@ -4,25 +4,25 @@ format: html
 editor: visual
 ---
 
-## Libraries
+## Libraries & Data
 
 ```{r}
 # Load/install required packages
-library(tidyverse)
-library(usethis)
-library(rpart)
-library(ggplot2)
 library(biomod2)
-library(gridExtra)
-library(patchwork)
-library(ggspatial)
-library(prettymapr)
-library(rpart.plot)
-library(pdp)
 library(caret)
-library(randomForest)
-library(ranger)
 library(gbm)
+library(ggplot2)
+library(ggspatial)
+library(gridExtra)
+library(here)
+library(patchwork)
+library(pdp)
+library(prettymapr)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(ranger)
+
 # We use the same dataset that we used for the GLM lab (Red Fox)
 # Read data
 mammals_data <- read.csv(here("data/mammals_and_bioclim_table.csv"),row.names = 1)
@@ -83,6 +83,7 @@ The book’s code does not work. This is the modified code to create response cu
 all_pdp_list <- list()
 
 # Loop through each variable and calculate the partial dependence
+# Loop through each variable and calculate the partial dependence
 for (variable in c("bio3", "bio7", "bio11", "bio12")) {
   pdp_data <- partial(RP, pred.var = variable, prob = TRUE, which.class = 2, 
                       grid.resolution = 50, plot = FALSE)
@@ -95,6 +96,7 @@ for (variable in c("bio3", "bio7", "bio11", "bio12")) {
   # Append this data frame to the list
   all_pdp_list[[variable]] <- pdp_data_df
 }
+
 
 # Combine all the partial dependence data frames into one using do.call and rbind
 all_pdp_data <- do.call(rbind, all_pdp_list)
@@ -120,3 +122,371 @@ pdp_plot <- ggplot(all_pdp_data, aes(x = value, y = yhat)) +
 print(pdp_plot)
 
 ```
+
+How do response curves look like? overfitting? can you explain?
+
+RP techniques form the basis of more complex and more powerful approaches like Random Forest and Boosted Regression Trees. These alternative approaches are interesting, as it is not always easy to determine the optimal size of a tree. Cross-validation strategies can sometimes produce puzzling findings, supporting different tree sizes that can lead to approximately similar predictive performance and error rates. More generally speaking, one tree to the data is a high-variance operation since local optima could lead to non-optimal trees.Bootstrap aggregations of trees and boosting are interesting alternative responses to the dilemma of selecting an appropriate tree size
+
+# Boosting and Bagging Approaches
+
+We saw that RP methods can be used as alternative approaches to regression techniques (e.g. GLM, GAM) for predicting species distributions. They are not based on assumptions of normality and user-specified model statements as OLS regression. However, the classification into groups can be influenced by local optima or noise in the data. Therefore, there is not one single decision tree that best explain the habitat suitability of a given species, but rather several trees which perform just as accurately when predicting a response.
+
+Bagging – a short for bootstrap aggregation: In this approach, a large number of bootstrap samples are drawn from the available data (random subsampling with replacement of rows of data), a model (e.g. RP) is applied to each bootstrap sample, and then the results are combined into an ensemble. The final prediction is made either by averaging the outputs of regression tree approaches or by simple voting in the case of classification tree approaches. This type of procedure has been shown to drastically reduce the associated variance of the prediction. This bagging procedure applied to RP together with certain other refinements has given rise to the well-known random forests algorithm.
+
+Boosting, like bagging, is another ensemble approach developed to improve the predictive performance of models. However, unlike bagging that uses a simple averaging (in regression trees) or voting (in classification trees) of results to obtain an overall prediction, boosting is a forward stage-wise procedure. In a boosting process, models (e.g. logistic regressions or decision trees) are fitted sequentially to the data. Interestingly, in this approach, model fitting is conducted on the residuals of the previous model(s), at each iteration. This is done repeatedly until a final fit is obtained. There are various ways of conducting this forward procedure and the method can be applied to different model types. Friedman (Friedman2001) proposed the stochastic gradient boosting procedure which improves the quality of the fit and avoids overfitting. Boosted regression trees belong to this category
+
+## Random Forest
+
+Random forests have been developed to check for overfitting by adding some stochasticity to the process of building the trees, but also at each node of each tree. Let’s assume that we have N plots or sites and X explanatory variables, each tree is grown based on the follow procedure:
+
+1.        Take a bootstrapped sample of N sites at random with replacement. This sample represents the training set for growing the tree.
+
+2.        At each node, select x candidate variables randomly out of all X predictors and evaluate the best split based on one of these x variable for the node. The value of x has to be selected beforehand and is kept constant during the forest growing.
+
+3.        Each tree is grown to the largest possible extent. There is no pruning.
+
+The number of candidate variables taken randomly at each node is one of the few adjustable parameters to which random forests are somewhat sensitive. However, it is argued that the square root of the number of variables is a good compromise for classification trees and the number of variables divided by three for regression trees
+
+```{r}
+library(randomForest)
+RF <- randomForest(x = mammals_data[, c("bio3", "bio7", "bio11",
+                                           "bio12")], y = as.factor(mammals_data$VulpesVulpes), ntree = 1000, importance = TRUE)
+
+```
+
+“ntree” specifies the number of trees to grow in the forest. The more trees, the more robust the model is to variance in the data, potentially leading to better performance. However, more trees also mean more computation time and memory usage. Common default values are 500 or 1000, but it’s often useful to test how performance metrics evolve as the number of trees increase
+
+The importance = TRUE argument makes it possible to estimate the importance of each variable based on a permutation procedure that measures the drop in mean accuracy when the given variable is permuted. Note that in our example we transformed the binary presence–absence into a factor in order to enforce a classification tree. ###Variable importance Let’s look at the variable importance output:
+
+```{r}
+randomForest:: importance(RF)
+```
+
+The output from the importance function in the randomForest package provides several columns that give you insights into how each predictor variable influences the model performance. Here’s a breakdown of what each column represents:
+
+0 and 1: Represent the classes of the target variable (VulpesVulpes). For a binary classification problem like presence/absence, these columns show the decrease in model accuracy for class 0 and class 1, respectively, when the variable is permuted. Permutation is a specific technique used to assess the impact of each predictor variable on the model’s prediction accuracy. It is a complicated technique that we indeed do not need to know the details. We only needs to know what the numbers mean. In fact, these 2 first columns are less important than next 2 columns which combines these 2 in single metrics.
+
+MeanDecreaseAccuracy: This column shows the average decrease in accuracy across all classes when the predictor variable is permuted. This metric combines the influence of the variable on both classes into a single summary statistic. Higher values indicate a variable that is more important across all predictions.
+
+MeanDecreaseGini: This measures the total decrease in node impurity (Gini index) that results from splits over this predictor, averaged over all trees in the forest. The Gini index is a measure of how often a randomly chosen element would be incorrectly classified. Therefore, variables with higher values in this column are more influential in defining well-separated groups in the data.
+
+How to Interpret the Results: bio3: Shows a higher importance for class 0 than for class 1 and has a very high MeanDecreaseGini, indicating it is very influential in splitting nodes in the trees. bio7: While it has a significant importance score for class 1 (much higher than for class 0), its overall influence on accuracy (MeanDecreaseAccuracy) and node purity (MeanDecreaseGini) is more moderate. bio11 and bio12: These variables have more balanced importance scores between classes, with bio12 showing notably lower Gini decrease, suggesting it may be less critical for node splitting compared to others, despite its higher accuracy influence. Generally, variables with higher scores in MeanDecreaseAccuracy and MeanDecreaseGini are considered more critical for the model. Variables with high class-specific importance scores indicate a strong role in predicting specific classes. This interpretation helps in understanding which features are most influential in your model and how they might affect the predictions for different classes.
+
+### Prediction map
+
+```{r}
+# Add predictions to your data frame
+RF.pred <- predict(RF, type = "prob")[, 2]
+mammals_data$RF.pred = RF.pred
+# Prediction map with a simple base map
+ggplot() +
+  annotation_map_tile() +  # This adds a base map
+  geom_point(data = mammals_data, aes(x = X_WGS84, y = Y_WGS84, color = RF.pred), alpha = 0.4, size = 0.6) +
+  scale_color_gradient(low = "blue", high = "red", name = "Habitat Suitability") +
+  labs(title = "RF-Prediction Map", x = "Longitude", y = "Latitude") +
+  theme_minimal() +
+  theme(legend.position = "bottom", axis.text = element_text(size = 8))
+
+```
+
+Compare this map with the prediction map obtained from the RP model. Do they differ? how?
+
+###Response curves We can see from the response curves that random forests are based on RP with sharp steps along the gradients, but that in general the response curves look similar to those extracted from models such as GAM or GLM. Personally, I like GAM’s and GLM’s since they are smoother. Do you think we have kind of overfitting here?
+
+```{r}
+all_pdp_list_RF <- list()
+
+# Loop through each variable and calculate the partial dependence
+for (variable in c("bio3", "bio7", "bio11", "bio12")) {
+  pdp_data_RF <- partial(RF, pred.var = variable, prob = TRUE, which.class = 2, 
+                      grid.resolution = 50, plot = FALSE)
+  # Convert to a data frame
+  pdp_data_df_RF <- as.data.frame(pdp_data_RF)
+  # Standardize column names
+  names(pdp_data_df_RF) <- c("value", "yhat")
+  # Add the variable name as a column
+  pdp_data_df_RF$variable <- variable
+  # Append this data frame to the list
+  all_pdp_list_RF[[variable]] <- pdp_data_df_RF
+}
+
+# Combine all the partial dependence data frames into one using do.call and rbind
+all_pdp_data_RF <- do.call(rbind, all_pdp_list_RF)
+# Ensure that variable column is a factor for proper facet plotting
+all_pdp_data_RF$variable <- factor(all_pdp_data_RF$variable, levels = c("bio3", "bio7", "bio11", "bio12"))
+
+# Now plot using ggplot with facet_wrap
+pdp_plot_RF <- ggplot(all_pdp_data_RF, aes(x = value, y = yhat)) +
+  geom_line() +
+  facet_wrap(~variable, scales = "free_x", ncol = 4) + 
+  labs(y = "Probability of Occurrence") +
+  theme_minimal() +
+  theme(
+    strip.text.x = element_text(size = 12, face = "bold"),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none",
+    # Add panel borders with the updated argument
+    panel.border = element_rect(colour = "black", fill=NA, linewidth=1)
+  )
+
+# Print the plot
+print(pdp_plot_RF)
+
+```
+
+### Optianl tuning Random Forest practice
+
+This is not in your book but you are welcome to explore it.
+
+To find the best configuration for a Random Forest model, you’ll typically want to conduct hyperparameter tuning. This usually involves running the model many times with different combinations of hyperparameters and determining which combination produces the best model performance according to a chosen metric (e.g., accuracy, F1 score).
+
+In R, one way to conduct hyperparameter tuning for Random Forest is by using the caret package, which provides a convenient framework for model training and hyperparameter tuning.
+
+Here is a step-by-step approach you could follow, illustrated with code:
+
+Load the Data: First, load the data from the CSV file. Preprocess the Data: Ensure that the target variable is a factor if you’re doing classification. Configure Training Control: Set up cross-validation and choose a metric to evaluate. Tune Hyperparameters: Use grid search or random search to find the best hyperparameters.
+
+```{r}
+# Step 1: Load the data
+# You have already done that
+
+# Step 2: Preprocess the data
+# Make sure the target variable is a factor for classification
+mammals_data$VulpesVulpes <- as.factor(mammals_data$VulpesVulpes)
+
+# Splitting data into predictors and target variable
+predictors <- mammals_data[, c("bio3", "bio7", "bio11", "bio12")]
+target <- mammals_data$VulpesVulpes
+
+# Step 3: Configure training control
+# Here we're using 5-fold cross-validation
+train_control <- trainControl(method = "cv", number = 5, search = "grid")
+
+# Step 4: Define the tuning grid. Here's an example grid
+tune_grid <- expand.grid(
+  mtry = c(2, 3, sqrt(ncol(predictors))), 
+  splitrule = c("gini", "extratrees"),
+  min.node.size = c(1, 5, 10)
+)
+
+# Step 5: Train the model
+set.seed(123) # for reproducibility
+rf_model <- train(
+  x = predictors, 
+  y = target, 
+  method = "ranger", 
+  trControl = train_control, 
+  tuneGrid = tune_grid,
+  metric = "Accuracy" # Choose the metric important for your problem
+)
+
+# Step 6: Print the results to find the best parameters
+print(rf_model)
+
+```
+
+The splitrule parameter in the context of decision trees refers to the criterion used to split a node. The randomForest package in R, which is a direct implementation of Breiman’s Random Forest algorithm, does not have an explicit splitrule parameter. However, other implementations of Random Forest, like the ranger package in R, offer the splitrule parameter with options such as “gini”, “extratrees”, and others. The extratrees option, standing for “Extremely Randomized Trees”, is a variation of the standard tree-building algorithm. In Extremely Randomized Trees: At each split in the tree, instead of looking for the most discriminative thresholds, thresholds are drawn at random for each candidate feature and the best of these randomly-generated thresholds is picked as the splitting rule. It typically makes the model more robust to noise in the data. If you want to use this option in R, you would typically use the ranger function from the ranger package instead of the randomForest function from the randomForest package. Here’s how you can use it:
+
+```{r}
+library(ranger)
+
+# Using ranger with extratrees split rule
+rf_model <- ranger(
+  formula         = VulpesVulpes ~ bio3 + bio7 + bio11 + bio12, 
+  data            = mammals_data,
+  num.trees       = 1000,
+  mtry            = sqrt(ncol(mammals_data) - 1),
+  importance      = 'impurity',
+  splitrule       = 'extratrees',
+  min.node.size   = 1,
+  sample.fraction = 1,
+  seed            = 123 # Set for reproducibility
+)
+
+# Print the resulting model
+print(rf_model)
+
+```
+
+Here, ranger() is used similarly to randomForest(), but it includes the splitrule parameter which allows you to specify ‘extratrees’ for extremely randomized trees.
+
+Note that num.trees, mtry, and min.node.size are equivalent to ntree, mtry, and nodesize from the randomForest function, respectively.
+
+# Boosted Regression Trees
+
+gradient boosting models (also called boosted regression trees provide a very flexible alternative ensemble modeling procedure to bagging. Unlike bagging that averages unpruned trees built on bootstrapped sample data, boosting uses a forward stage-wise procedure that iteratively fits simple trees to the training data, while gradually increasing focus on poorly modeled observations (by fitting residuals to the same predictors again). The general idea is to compute a sequence of very simple trees, where each new tree is fitted to the residuals of the set of trees so far developed. This procedure, also called additive weighted expansions of trees, has been show to improve not only the predictive ability of the model but also the bias and variance of estimates, even when the relationships between the environmental variables and the species are very complex. In addition to this process,Friedman2002 proposed improving the quality of BRT by adding stochasticity. For each consecutive shallow tree, only a random sample of the dataset is used for training and the remaining for testing. This is similar to random forests for this purpose, except that the sampling is without replacement in BRT. Building consecutive trees from a random sub-sample of observations is called stochastic gradient boosting which improve predictive accuracy and obviously increase the computational speed since the trees are built from smaller fractions than the original datasets. The fraction of data used at each consecutive tree, called the bag fraction, has been suggested to contain 0.5 and 0.75 of the full dataset. Setting a smaller bag fraction to train the model will result in excessively high prediction variance between runs if the number of trees is low. Among the different parameters of importance when fitting BRTs, the number of trees to be fitted, the learning rate, and the interaction depth are all critical (see slides and the book chapter for details) Boosted regression trees are implemented in the gbm package (Ridgeway, Reference Ridgeway1999). The dismo package proposes some additional features on top of the gbm package, to improve variable selection and offer additional summary statistics. A number of important parameters need to be set: n.trees, interaction.depth, shrinkage, bag.fraction and cv.folds. The parameter n.trees sets the maximum number of trees to be fitted. The different diagnostic tools proposed by generalized boosting model (gbm) will then reduce this number to the “relevant number” of trees. The interaction.depth corresponds to the complexity of the fitted trees at each stage (three nodes in our worked example). The shrinkage parameter corresponds to the learning rate. The bag.fraction corresponds to the random fraction of data used to fit each consecutive tree. Finally, cv.folds\>1 can be used, in addition to the usual fit, to perform a cross-validation and calculate an estimate of generalization error returned in cv.error. This is very useful for selecting the appropriate number of trees for predictions. The function glm.perf allows the user to extract the number of relevant trees based on the cross-validation procedure (Ridgeway, Reference Ridgeway1999). In the example below, we chose a slow learning rate (0.01), a bag fraction of 0.5 and an interaction depth of 3. The optimization will also perform a 10-fold cross-validation to select the appropriate number of trees in light of the tree complexity and learning rate. We set up a large number of initial trees to further check how the improvement in deviance explains change as new trees are added.
+
+```{r}
+# Read data again
+mammals_data <- read.csv(here("data/mammals_and_bioclim_table.csv"),row.names = 1)
+# If encounter an error, restart R and only load gbm package to avoid conflict between packages
+GBM.mod <- gbm(VulpesVulpes ~ bio3 + bio7 + bio11 + bio12,
+                 data = mammals_data, distribution = "bernoulli", n.trees = 10000,
+                 interaction.depth = 3, shrinkage = 0.01, bag.fraction = 0.5,
+                 cv.folds = 10)
+
+```
+
+We can investigate how the improvement in fit changes as more trees are added (using the gbm.perf function with plot.it=T)
+
+```{r}
+gbm.mod.perf <- gbm.perf(GBM.mod, method = "cv", plot.it = T)
+```
+
+The y-axis represents the error of the model in function of the total number of trees (x-axis). The black line represents the error of the calibrated model with all data, while the green line represents the error from the cross-validation runs. From the curve we can see that 1000 trees is not enough to get a reliable and stable model while a model with more than 5000 trees is enough. The user can here consider to either manually select 6000 trees for making predictions or plotting the response curve, or to select the optimal number of trees using the function (gbm.perf) which is here 10000 (dashed line). For the sake of simplicity, we will here use the output from the gbm.perf function.
+
+summary.gbm() extracts the relative importance of each explanatory variable. This function proposes two different ways of estimating variable importance. The first is the relative.influence, which is the default. Interestingly, this approach is very similar to the weight of evidence based on AIC. The second choice is the permutation.test.gbm, which is very similar to the one used in random forests since it corresponds to the reduction in predictive performance when the variable of interest is permuted.
+
+```{r}
+summary(GBM.mod, method = relative.influence, plotit = T)
+```
+
+```{r}
+summary(GBM.mod, method = permutation.test.gbm, plotit = T)
+```
+
+An additional feature of gbm is the “inner” argument (i.var) used to plot the response curve of species as a function of the environmental variables
+
+```{r}
+ plot(GBM.mod, i.var = "bio3", n.trees = gbm.mod.perf)
+```
+
+You can create response plot for each covariate. it should be noted that the scale of the y-axis is expressed in the transformed scale (here using presence–absence and using the binomial model family, the scale is logistic). The following codes provide response plots in the probability scale:
+
+```{r}
+library(gbm)
+library(ggplot2)
+library(gridExtra)
+
+#  variables
+vars_to_plot <- c("bio3", "bio7", "bio11", "bio12")
+
+# Create empty plot list
+plot_list <- list()
+
+# Calculate and plot partial dependence for each variable
+index <- 1
+for (var in vars_to_plot) {
+  # Generate partial dependence data
+  pd_data <- plot(GBM.mod, i.var = var, n.trees = gbm.mod.perf, return.grid = TRUE, plot.it = FALSE)
+  
+  # Apply logistic transformation to convert log-odds to probabilities
+  pd_data$y <- 1 / (1 + exp(-pd_data$y))
+  
+  # Generate plot using aes() with the correct variable name directly
+  plot_list[[index]] <- ggplot(pd_data, aes_string(x = names(pd_data)[1], y = "y")) +
+    geom_line() +
+    labs(title = var, y = "Predicted Probability", x = var)
+  index <- index + 1
+}
+
+# Use gridExtra to arrange the plots
+do.call(grid.arrange, c(plot_list, ncol = 2))
+
+```
+
+# Prediction map
+
+Predictions from GBM can be obtained with the usual predict() function, with a supplementary parameter specifying the number of trees that should be used to make the prediction (Figure 12.7). The best practice is to use the results from the gbm.perf() function. The book codes do not work.
+
+```{r}
+GBM.pred <- predict(GBM.mod, newdata = mammals_data[, c("bio3",
+                                                        "bio7", "bio11", "bio12")], 
+                    type = "response",n.trees = gbm.mod.perf)
+
+mammals_data$GBM_pred <- predict(GBM.mod, newdata = mammals_data[, c("bio3", "bio7", "bio11", "bio12")], type = "response", n.trees = gbm.mod.perf)
+
+# Create the base map data
+world_map <- map_data("world")
+
+# Plot for original data
+p1 <- ggplot(data = mammals_data, aes(x = X_WGS84, y = Y_WGS84, color = as.factor(VulpesVulpes))) +
+  geom_polygon(data = world_map, aes(x = long, y = lat, group = group), fill = "white", color = "black", size = 0.1) +
+  geom_point(alpha = 0.6, size = 0.8) +
+  scale_color_manual(values = c("grey", "black"), name = "Occurrence Record") +
+  labs(title = "Original Data") +
+  theme_minimal() +
+  theme(legend.position = "right", plot.background = element_rect(fill = "white"))
+
+# Plot for GBM predictions
+p2 <- ggplot(data = mammals_data, aes(x = X_WGS84, y = Y_WGS84, color = GBM_pred)) +
+  geom_polygon(data = world_map, aes(x = long, y = lat, group = group), fill = "white", color = "black", size = 0.1) +
+  geom_point(alpha = 0.6, size = 0.8) +
+  scale_color_gradient(low = "blue", high = "red", name = "Prediction Probability") +
+  labs(title = "GBM Prediction") +
+  theme_minimal() +
+  theme(legend.position = "right", plot.background = element_rect(fill = "white"))
+
+# Arrange both plots side by side
+library(gridExtra)
+grid.arrange(p1, p2, ncol = 2)
+
+```
+
+# Using caret Package for Systematic Tuning
+
+This is an optional practice. The caret package in R provides an extensive framework for machine learning and can be used to efficiently tune the hyperparameters of models, including GBM.
+
+Finding the best settings for a GBM (Gradient Boosting Machine) model involves tuning several hyperparameters to optimize model performance. We are using the gbm package with a set of initial parameters. To find the optimal configuration, you would typically experiment with various values of the key hyperparameters:
+
+n.trees - Number of boosting iterations. interaction.depth - Maximum depth of variable interactions (essentially the depth of the individual regression trees). shrinkage - Learning rate that scales the contribution of each tree. bag.fraction - Fraction of the data to be used for each boosting iteration, analogous to the subsampling rate.
+
+Here’s a systematic way to approach hyperparameter tuning for your GBM model:
+
+```{r}
+# Reload data
+mammals_data <- read.csv(here("data/mammals_and_bioclim_table.csv"),row.names = 1)
+
+# We need to define 0 and 1 as class0 and class1
+mammals_data$VulpesVulpes <- as.factor(mammals_data$VulpesVulpes)
+levels(mammals_data$VulpesVulpes) <- c("Class0", "Class1")
+
+# Set reproducibility
+set.seed(123)
+
+# Define training control settings
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  savePredictions = "final",
+  classProbs = TRUE,  # Ensure class probabilities are calculated for ROC AUC
+  summaryFunction = twoClassSummary  # Appropriate for binary classification
+)
+
+
+# Define the tuning grid including all necessary parameters
+gbmGrid <- expand.grid(
+  n.trees = seq(100, 1000, by= 300),       # Number of trees
+  interaction.depth = c(1, 3, 5),         # Depth of tree interactions
+  shrinkage = c(0.01, 0.1),               # Learning rate
+  n.minobsinnode = c(10, 20)              # Minimum number of observations in nodes
+)
+
+# Train the model using the updated grid and control settings
+set.seed(123)  # for reproducibility
+gbm_tuned <- train(
+  VulpesVulpes ~ bio3 + bio7 + bio11 + bio12,
+  data = mammals_data,
+  method = "gbm",
+  trControl = train_control,
+  tuneGrid = gbmGrid,
+  metric = "ROC",  # Using ROC since it's for classification
+  distribution = "bernoulli"
+)
+
+# Output the best model and plot the performance
+print(gbm_tuned)
+plot(gbm_tuned)
+
+```
+
+```{r}
+# Print just the best tuning parameters
+print(gbm_tuned$bestTune)
+
+```
+
+The output from print(gbm_tuned) includes a lot of information, such as:
+
+A summary of the training process. The values of the tuning parameters for the best-performing model. Performance metrics of models across different parameter combinations if savePredictions = “final” was set. gbm_tuned\$bestTune will show you a data frame with the best values found for n.trees, interaction.depth, shrinkage, and n.minobsinnode. These are the parameters that yielded the highest ROC AUC value during the cross-validation process.
